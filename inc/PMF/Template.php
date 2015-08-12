@@ -363,13 +363,13 @@ class PMF_Template
     private function _checkContent($content)
     {
         // Security measure: avoid the injection of php/shell-code
-        $search      = array('#<\?php#i', '#\{$\{#', '#<\?#', '#<\%#', '#<script[^>]+php#mi');
+       // $search      = array('#<\?php#i', '#\{$\{#', '#<\?#', '#<\%#', '#<script[^>]+php#mi');
         $phppattern1 = "&lt;?php";
         $phppattern2 = "&lt;?";
         $replace     = array($phppattern1, '', $phppattern2, '', '' );
 
         // Hack: Backtick Fix
-        $content = str_replace('&acute;', $content);
+        $content = str_replace('`', '&acute;', $content);
 
         foreach ($content as $var => $val) {
             if (is_array($val)) {
