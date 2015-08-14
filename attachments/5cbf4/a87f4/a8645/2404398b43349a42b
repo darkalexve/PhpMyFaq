@@ -1,0 +1,148 @@
+Procedimiento para agregar VLAN 12 a la Nube OpenStack 
+
+
+Paso 1: Activacion del puerto en OpenVSwitch:
+
+Se ejecuto en los 2 nodos controladores y 30 nodos de computo (excepto los 04-17-25-28 que se encuentra en revision) el siguiente comando:
+
+ovs-vsctl add-port br-eth1 eth1-12 tag=12 -- set interface eth1-12 type=internal
+
+Luego se ejecuta show para validar que todo este correcto:
+
+ovs-vsctl show
+
+Paso 2: Se define la interfaz eth1-12.
+
+Se edita el archivo /etc/network/interfaces en todos los nodos (compute+controllers) añadiendo el siguiente contenido.
+
+auto eth1-12
+iface eth1-12 inet manual
+up ifconfig $IFACE 0.0.0.0 up
+up echo 1 >/proc/sys/net/ipv6/conf/$IFACE/disable_ipv6
+down ip link set $IFACE promisc off
+down ifconfig $IFACE down
+
+Y se activó la interfaz con el siguiente comando en cada nodo:
+
+ifup eth1-12
+
+Paso 3: Creacion de la red en Neutron
+
+Desde el controller01 ejecutamos lo siguiente:
+
+source /root/keystonerc_admin
+
+luego:
+
+neutron net-create net-vlan-12 --shared --provider:network_type vlan --provider:physical_network opennet --provider:segmentation_id 12 --router:external=true
+
+arrojando la siguiente data:
+
+Created a new network:
++---------------------------+--------------------------------------+
+| Field                     | Value                                |
++---------------------------+--------------------------------------+
+| admin_state_up            | True                                 |
+| id                        | 8a1cd39b-0d4b-41bd-9213-65b3d18d4d2b |
+| name                      | net-vlan-12                          |
+| provider:network_type     | vlan                                 |
+| provider:physical_network | opennet                              |
+| provider:segmentation_id  | 12                                   |
+| router:external           | True                                 |
+| shared                    | True                                 |
+| status                    | ACTIVE                               |
+| subnets                   |                                      |
+| tenant_id                 | 0de1e86542724be380d33acdc395eedd     |
++---------------------------+--------------------------------------+
+
+Paso 4: Creacion de la Subnet en Horizon
+
+Luego vamos al Horizon y realizamos la creacion de la subnet, hacemos login, vamos a la pestaña Admin => System => Networks. Ahi veremos la net-vlan-12 que creamos anteriormente desde neutron, ahora para crear la subnet debemos entrar en dicha net-vlan-12 desde el horizon y pulsar el boton de create subnet llenando los datos de la siguiente forma:
+
+Subnet Name: subnet-vlan-12
+Network Address: 172.16.12.0/24
+IPV4
+Gateway: 172.16.12.254
+
+Next y te pedira los detalles de la subnet, es decir el rango de donde comienza hasta donde termina y los servidores DNS (coloca los controladores de OpenStack, el 17.1 y 17.2).
+
+Paso 5: Creacion de Zonas y Reversos DNS.
+
+Conectate al mirror-01 (172.16.15.30) y ve a la ruta cd /etc/bind/
+
+Se edita la zona hc.p2p.dom modificando el serial y añadiendo los siguientes parametros:
+
+En la seccion:
+
+;
+; Nombres genericos para las VM's
+;
+
+dnsmasq-172-16-12       IN      A       172.16.12.1
+$GENERATE 2-200         vm-172-16-12-$.cloud0.hc.p2p.dom.       A       172.16.12.$
+$GENERATE 2-200         host-172-16-12-$.cloud0.hc.p2p.dom.     A       172.16.12.$
+
+donde 2-200 es el rango en el cual se podran crean VM's 
+
+Luego se edita la zones.p2p.reverse añadiendo el reverso de la ip 172.16.12.x.
+
+colocando lo siguiente:
+
+zone "12.16.172.in-addr.arpa" {
+        type master;
+        file "/etc/bind/172.16.12.rev";
+};
+
+Por ultimo creamos el archivo de reverso de la ip 172.16.12.x lo llamamos 172.16.12.rev, para esto tomamos como base uno ya creado previamente (el 10.1.234.rev) dejando el archivo asi:
+
+
+$ORIGIN .
+$TTL 86400      ; 1 day
+12.16.172.in-addr.arpa  IN SOA  mirror.hc.p2p.dom. root.mirror.hc.p2p.dom. (
+                                2015072901 ; serial
+                                28800      ; refresh (8 hours)
+                                14400      ; retry (4 hours)
+                                3600000    ; expire (5 weeks 6 days 16 hours)
+                                86400      ; minimum (1 day)
+                                )
+                        NS      mirror.hc.p2p.dom.
+$ORIGIN 12.16.172.in-addr.arpa.
+;
+;
+1                       PTR     dnsmasq-172-16-12.cloud0.hc.p2p.dom.
+$GENERATE 2-200 $       PTR     vm-172-16-12-$.cloud0.hc.p2p.dom.
+
+
+Guardamos los cambios, todos estos archivos los pasamos via scp al mirror-02 en su misma ruta.
+
+Le damos restart al servicio bind con /etc/init.d/bind9 restart. 
+
+Ahora nos conectamos a los controladores de OpenStack (172.16.17.1/172.16.17.2), editamos las zonas reversas para asegurar la creacion del archivo de cache.
+
+vamos a /etc/bind/ y editamos zones.p2p.reverse añadiendo lo siguiente:
+
+zone "12.16.172.in-addr.arpa" {
+        type slave;
+        file "/var/cache/bind/172.16.12.rev.cache";
+        masters { 172.16.15.25; };
+};
+
+Guardamos cambios y le damos restart al servicio bind con /etc/init.d/bind9 restart. 
+
+Esto debemos replicarlo en el controller02. Recuerda que este paso debe hacerse en ambos controllers.
+
+
+Realizamos las pruebas de constumbre haciendo: 
+
+host dnsmasq-172-16-12.cloud0.hc.p2p.dom.
+
+ping dnsmasq-172-16-12.cloud0.hc.p2p.dom.
+
+Por ultimo creamos una VM en OpenStack desde el horizon en la nueva vlan y probamos que tenga acceso a la red, si no lo tiene, matar a David.
+
+FIN.- 
+
+
+
+
+
